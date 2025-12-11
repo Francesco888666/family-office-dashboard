@@ -12,7 +12,6 @@ import os
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
-import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Family Office Dashboard", layout="wide")
 
@@ -103,36 +102,41 @@ init_db()
 st.sidebar.header("📁 Input dati")
 mode = st.sidebar.radio("Sorgente dati", ["Carica CSV", "Usa DB (salvati)"])
 
+df = None
+
 if mode == "Carica CSV":
-    uploaded = st.sidebar.file_uploader("Carica file CSV (Client,Ticker,Quantity,Price,...)",
-                                        type=["csv"], accept_multiple_files=False)
+    uploaded = st.sidebar.file_uploader("Carica file CSV (Client,Ticker,Quantity,Price,...)", type=["csv"])
     if uploaded:
-        df = pd.read_csv(uploaded)
-        df.columns = [c.strip() for c in df.columns]
-        required = {"Client", "Ticker", "Quantity"}
-        if not required.issubset(set(df.columns)):
-            st.error(f"CSV mancante colonne richieste: {required}. Il CSV caricato ha: {list(df.columns)}")
-            st.stop()
-        for col in ["Price", "Sector", "Country", "AssetClass"]:
-            if col not in df.columns:
-                df[col] = np.nan
-        if st.sidebar.button("Salva portafoglio nel DB"):
-            save_df_to_db(df[["Client","Ticker","Quantity","Price","Sector","Country","AssetClass"]])
-            st.sidebar.success("Salvato nel DB")
-else:
+        try:
+            df = pd.read_csv(uploaded)
+            df.columns = [c.strip() for c in df.columns]
+        except Exception as e:
+            st.error(f"Errore lettura CSV: {e}")
+elif mode == "Usa DB (salvati)":
     df = load_clients_from_db()
-    if df.empty:
-        st.warning("Nessun portafoglio nel DB. Carica un CSV o salva uno in DB.")
-        st.stop()
+
+# -------------------------
+# Check df valido
+# -------------------------
+if df is None or df.empty:
+    st.warning("Nessun dato disponibile. Carica un CSV valido o salva dati nel DB.")
+    st.stop()
+
+# -------------------------
+# Aggiungi colonne mancanti
+# -------------------------
+for col in ["Price", "Sector", "Country", "AssetClass"]:
+    if col not in df.columns:
+        df[col] = np.nan
 
 # -------------------------
 # Gestione Price mancante
 # -------------------------
-if "Price" not in df.columns:
-    st.warning("Colonna 'Price' mancante: verrà calcolata automaticamente dai prezzi storici")
-    df["Price"] = np.nan
-
+if df["Price"].isna().all():
+    st.warning("Colonna 'Price' vuota o mancante: verrà calcolata dai prezzi storici")
 df["Value"] = df["Quantity"] * df["Price"]
+total_val = df["Value"].sum()
+df["Weight"] = df["Value"] / total_val if total_val > 0 else 1 / len(df)
 
 # -------------------------
 # Client selection
@@ -143,12 +147,9 @@ df_client = df[df["Client"] == selected_client].copy()
 
 st.title(f"Family Office Dashboard — {selected_client}")
 
-if df_client["Value"].sum() == 0:
-    st.warning("Valore totale del portafoglio = 0: i prezzi di acquisto non sono presenti o sono 0")
-
-total_val = df_client["Value"].sum()
-df_client["Weight"] = df_client["Value"] / total_val if total_val>0 else 1/len(df_client)
-
+# -------------------------
+# Holdings table
+# -------------------------
 st.subheader("Holdings")
 st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
@@ -156,8 +157,10 @@ st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","
 # Allocation charts
 # -------------------------
 st.subheader("Allocazione")
-fig_class = px.pie(df_client.groupby("AssetClass")["Value"].sum().reset_index(), names="AssetClass", values="Value", hole=0.4, title="Asset Class Allocation")
-fig_sector = px.bar(df_client.groupby("Sector")["Value"].sum().reset_index(), x="Sector", y="Value", title="Sector Allocation")
+fig_class = px.pie(df_client.groupby("AssetClass")["Value"].sum().reset_index(),
+                   names="AssetClass", values="Value", hole=0.4, title="Asset Class Allocation")
+fig_sector = px.bar(df_client.groupby("Sector")["Value"].sum().reset_index(),
+                    x="Sector", y="Value", title="Sector Allocation")
 col1, col2 = st.columns(2)
 col1.plotly_chart(fig_class, use_container_width=True)
 col2.plotly_chart(fig_sector, use_container_width=True)
@@ -229,134 +232,11 @@ fig_corr = px.imshow(rets.corr(), text_auto=True, aspect="auto", title="Correlat
 st.plotly_chart(fig_corr, use_container_width=True)
 
 # -------------------------
-# Risk metrics per asset
-# -------------------------
-st.subheader("Metriche rischio per asset")
-risk_rows = []
-for t in rets.columns:
-    r = rets[t]
-    rr = {
-        "Ticker": t,
-        "CAGR": annualized_return_from_series(prices[t]),
-        "Volatility": r.std() * np.sqrt(252),
-        "Sharpe": sharpe_ratio(r),
-        "Sortino": sortino_ratio(r),
-        "MaxDrawdown": max_drawdown(prices[t])[0]
-    }
-    risk_rows.append(rr)
-df_risk = pd.DataFrame(risk_rows).set_index("Ticker")
-st.dataframe(df_risk)
-
-# -------------------------
-# Monte Carlo
-# -------------------------
-st.subheader("Monte Carlo")
-n_sim = st.slider("Numero simulazioni", 500, 20000, 5000, 500)
-horizon = st.slider("Giorni orizzonte", 30, 252*3, 252)
-mu = rets.mean().values
-cov = rets.cov().values
-sim_results = []
-rng = np.random.default_rng()
-for i in range(n_sim):
-    sim_daily = rng.multivariate_normal(mu, cov, horizon)
-    sim_port = np.cumprod(1 + sim_daily.dot(weights))[-1]
-    sim_results.append(sim_port)
-fig_mc = px.histogram(sim_results, nbins=100, title="Distribuzione Monte Carlo (valore finale)")
-st.plotly_chart(fig_mc, use_container_width=True)
-
-# -------------------------
-# PDF report
-# -------------------------
-st.subheader("Genera PDF Report")
-def fig_to_image_bytes(fig, width=900, height=600):
-    return fig.to_image(format="png", width=width, height=height, scale=2)
-
-def create_pdf_report(client_name, df_client, figures_dict, output_path="report.pdf"):
-    c = canvas.Canvas(output_path, pagesize=A4)
-    w, h = A4
-    margin = 40
-    y = h - margin
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(margin, y, f"Report Portafoglio — {client_name}")
-    y -= 30
-    c.setFont("Helvetica", 10)
-    total_val = df_client["Value"].sum()
-    c.drawString(margin, y, f"Valore Totale: {total_val:,.2f} | Asset: {len(df_client)}")
-    y -= 20
-    for title, fig in figures_dict.items():
-        try:
-            img_bytes = fig_to_image_bytes(fig, width=700, height=400)
-            img = ImageReader(io.BytesIO(img_bytes))
-            if y < 300:
-                c.showPage()
-                y = h - margin
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(margin, y, title)
-            y -= 16
-            c.drawImage(img, margin, y-300, width=500, height=300)
-            y -= 320
-        except:
-            c.setFont("Helvetica", 9)
-            c.drawString(margin, y, f"Impossibile inserire grafico: {title}")
-            y -= 12
-    c.save()
-
-figures = {
-    "Allocazione AssetClass": fig_class,
-    "Allocazione Settore": fig_sector,
-    "Performance Cumulativa": fig_perf,
-    "Correlazioni": fig_corr,
-    "Equity & Drawdown": fig_dd,
-    "Monte Carlo": fig_mc
-}
-
-if st.button("Genera PDF completo"):
-    tmp_pdf = f"report_{selected_client}.pdf"
-    try:
-        create_pdf_report(selected_client, df_client, figures, output_path=tmp_pdf)
-        with open(tmp_pdf, "rb") as f:
-            st.download_button("Scarica PDF Report", f.read(), file_name=tmp_pdf, mime="application/pdf")
-        st.success("Report generato con successo.")
-        try: os.remove(tmp_pdf)
-        except: pass
-    except Exception as e:
-        st.error(f"Errore generazione PDF: {e}")
-
 # CSV download
+# -------------------------
 if st.button("Scarica CSV Report"):
     csv_bytes = df_client.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV", data=csv_bytes, file_name=f"report_{selected_client}.csv", mime="text/csv")
+    st.download_button("Download CSV", data=csv_bytes,
+                       file_name=f"report_{selected_client}.csv", mime="text/csv")
 
-# -------------------------
-# Simple local AI chat
-# -------------------------
-st.subheader("Chat AI locale")
-user_q = st.text_input("Fai una domanda (es. 'Qual è il rischio?')")
-
-def local_ai_reply(question, metrics):
-    q = question.lower()
-    ans = []
-    if "rischio" in q or "volatil" in q:
-        ans.append(f"Volatilità annua stimata: {metrics['volatility']:.2%}.")
-        if metrics['volatility'] > 0.20:
-            ans.append("Volatilità elevata (>20%). Considera diversificazione.")
-    if "drawdown" in q or "perdita" in q:
-        ans.append(f"Max drawdown stimato: {metrics['mdd']:.2%}.")
-        if metrics['mdd'] < -0.15:
-            ans.append("Drawdown significativo; verifica le posizioni principali.")
-    if "sharpe" in q:
-        ans.append(f"Sharpe ratio stimato: {metrics['sharpe']:.2f}.")
-        if metrics['sharpe'] < 0.5:
-            ans.append("Sharpe basso, rendimento corretto per rischio non favorevole.")
-    if "consigli" in q or "migliorare" in q:
-        ans.append("Controlla esposizione settoriale e concentrazione. Valuta re-balance periodico.")
-    if not ans:
-        ans = ["Posso rispondere a domande su rischio, drawdown, Sharpe e diversificazione."]
-    return " ".join(ans)
-
-metrics = {"volatility": port_vol, "mdd": mdd_val, "sharpe": port_sharpe}
-if user_q:
-    reply = local_ai_reply(user_q, metrics)
-    st.info(reply)
-
-st.info("Fine dashboard — puoi generare PDF, scaricare CSV o salvare portafogli in DB.")
+st.info("Dashboard pronta — Carica CSV o DB e seleziona cliente per visualizzare dati.")
