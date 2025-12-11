@@ -4,3 +4,6 @@ numpy
 yfinance
 plotly
 scipy
+kaleido
+reportlab
+matplotlib
