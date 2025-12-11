@@ -98,13 +98,34 @@ if mode=="Carica CSV":
     uploaded = st.sidebar.file_uploader("Carica file CSV", type=["csv"])
     if uploaded:
         try:
-            # Lettura robusta del CSV: utf-8-sig, rimozione BOM, spazi, caratteri invisibili
             df = pd.read_csv(uploaded, sep=",", header=0, encoding="utf-8-sig")
             df.columns = [str(c).strip().replace('\ufeff','').replace('\xa0','') for c in df.columns]
-            if "Client" not in df.columns:
+            
+            # Mappatura colonne italiane / alternative
+            col_map = {
+                "Client":["Client","Cliente"],
+                "Ticker":["Ticker","Simbolo"],
+                "Quantity":["Quantity","Quantità","Qty"],
+                "Price":["Price","Prezzo","Costo"],
+                "Sector":["Sector","Settore"],
+                "Country":["Country","Paese"],
+                "AssetClass":["AssetClass","ClasseAttivo","Classe Asset"]
+            }
+            
+            for std_col, alternatives in col_map.items():
+                for alt in alternatives:
+                    if alt in df.columns:
+                        df.rename(columns={alt: std_col}, inplace=True)
+                        break
+            
+            # Controllo colonne obbligatorie
+            required_cols = ["Client","Ticker","Quantity"]
+            missing = [c for c in required_cols if c not in df.columns]
+            if missing:
+                st.error(f"Colonne obbligatorie mancanti: {missing}")
                 st.error(f"Colonne trovate nel CSV: {df.columns.tolist()}")
-                st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
                 st.stop()
+                
         except Exception as e:
             st.error(f"Errore lettura CSV: {e}")
 elif mode=="Usa DB":
@@ -116,15 +137,6 @@ elif mode=="Usa DB":
 if df is None or df.empty:
     st.warning("Nessun dato disponibile. Carica un CSV valido o salva dati nel DB.")
     st.stop()
-
-# -------------------------
-# Check colonne obbligatorie
-# -------------------------
-required_cols = ["Client","Ticker","Quantity"]
-for col in required_cols:
-    if col not in df.columns:
-        st.error(f"Colonna obbligatoria mancante: {col}")
-        st.stop()
 
 # -------------------------
 # Aggiungi colonne mancanti
