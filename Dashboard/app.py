@@ -155,11 +155,16 @@ total_val = df["Value"].sum()
 df["Weight"] = df["Value"]/total_val if total_val>0 else 1/len(df)
 
 # -------------------------
-# Client selection
+# Client selection (tutti o singolo)
 # -------------------------
 clients = df["Client"].unique().tolist()
+clients.insert(0, "Tutti")  # Aggiungi opzione "Tutti"
 selected_client = st.sidebar.selectbox("Seleziona cliente", clients)
-df_client = df[df["Client"]==selected_client].copy()
+
+if selected_client == "Tutti":
+    df_client = df.copy()
+else:
+    df_client = df[df["Client"]==selected_client].copy()
 
 st.title(f"Family Office Dashboard — {selected_client}")
 
@@ -167,7 +172,7 @@ st.title(f"Family Office Dashboard — {selected_client}")
 # Holdings
 # -------------------------
 st.subheader("Holdings")
-st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
+st.dataframe(df_client[["Client","Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
 # -------------------------
 # Valutazioni totali portfolio
@@ -236,7 +241,8 @@ col1,col2,col3,col4 = st.columns(4)
 col1.metric("Rendimento annuo stimato",f"{port_ann:.2%}")
 col2.metric("Volatilità annua",f"{port_vol:.2%}")
 col3.metric("Sharpe",f"{port_sharpe:.2f}")
-col4.metric("Max Drawdown",f"{mdd_val:.2%}")
+col4.metric("Sortino",f"{port_sortino:.2f}")
+st.metric("Max Drawdown",f"{mdd_val:.2%}")
 
 # -------------------------
 # Heatmap rendimenti
