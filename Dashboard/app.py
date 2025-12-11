@@ -98,12 +98,16 @@ if mode=="Carica CSV":
     uploaded = st.sidebar.file_uploader("Carica file CSV", type=["csv"])
     if uploaded:
         try:
-            # Correzione: lettura CSV con utf-8-sig e rimozione spazi/BOM
-            df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
-            df.columns = [c.strip().replace('\ufeff','') for c in df.columns]
-            if "Client" not in df.columns:
-                st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
-                st.stop()
+            # Legge CSV e forza la prima riga come header
+        df = pd.read_csv(uploaded, sep=",", header=0, encoding="utf-8-sig")
+        # Pulisce i nomi delle colonne: rimuove spazi, BOM e caratteri strani
+        df.columns = [c.strip().replace('\ufeff','').replace('\xa0','') for c in df.columns]
+        # Converte i nomi in stringhe standard (nel caso ci fossero caratteri invisibili)
+        df.columns = [str(c) for c in df.columns]
+        if "Client" not in df.columns:
+            st.error(f"Colonne trovate nel CSV: {df.columns.tolist()}")
+            st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
+            st.stop()
         except Exception as e:
             st.error(f"Errore lettura CSV: {e}")
 elif mode=="Usa DB":
