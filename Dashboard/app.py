@@ -15,31 +15,25 @@ from reportlab.lib.utils import ImageReader
 st.set_page_config(page_title="Family Office Dashboard", layout="wide")
 
 # -------------------------
-# Helper: robust download
+# Helper: robust download with debug
 # -------------------------
 def safe_download(ticker, period="2y", retries=3, delay=1):
     for attempt in range(retries):
         try:
             df = yf.download(ticker, period=period, threads=False, progress=False)
             if df is not None and not df.empty and "Adj Close" in df.columns:
+                print(f"{ticker}: {len(df)} rows downloaded")
                 return df["Adj Close"]
-        except:
-            pass
+            else:
+                print(f"{ticker}: no data returned")
+        except Exception as e:
+            print(f"Attempt {attempt+1} failed for {ticker}: {e}")
         time.sleep(delay)
     return None
 
 # -------------------------
 # Finance helpers
 # -------------------------
-def annualized_return_from_series(price_series):
-    n_years = (price_series.index[-1] - price_series.index[0]).days / 365.25
-    return (price_series[-1] / price_series[0]) ** (1 / n_years) - 1 if n_years>0 else np.nan
-
-def max_drawdown(price_series):
-    cum_max = price_series.cummax()
-    drawdown = (price_series - cum_max)/cum_max
-    return drawdown.min(), drawdown
-
 def sharpe_ratio(returns, rf=0.01):
     ann_excess = (returns.mean()*252) - rf
     ann_vol = returns.std()*np.sqrt(252)
@@ -50,6 +44,11 @@ def sortino_ratio(returns, rf=0.01):
     downside = neg.std()*np.sqrt(252) if len(neg)>0 else np.nan
     ann_excess = (returns.mean()*252) - rf
     return ann_excess/downside if downside and downside>0 else np.nan
+
+def max_drawdown(price_series):
+    cum_max = price_series.cummax()
+    drawdown = (price_series - cum_max)/cum_max
+    return drawdown.min(), drawdown
 
 # -------------------------
 # Sidebar
@@ -62,14 +61,10 @@ if uploaded:
     try:
         df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
         df.columns = [c.strip() for c in df.columns]
-        # Rename columns if they are in another language
-        if 'Cliente' in df.columns:
-            df = df.rename(columns={'Cliente':'Client'})
-        if 'Quantita' in df.columns:
-            df = df.rename(columns={'Quantita':'Quantity'})
-        if 'Prezzo' in df.columns:
-            df = df.rename(columns={'Prezzo':'Price'})
-        # Check required column
+        # Rename columns if necessary
+        col_map = {'Cliente':'Client','Quantita':'Quantity','Prezzo':'Price'}
+        df = df.rename(columns={k:v for k,v in col_map.items() if k in df.columns})
+        # Check required columns
         if "Client" not in df.columns:
             st.error("CSV file does not contain required column 'Client'.")
             st.stop()
@@ -81,7 +76,7 @@ else:
     st.stop()
 
 # -------------------------
-# Check required columns
+# Required columns
 # -------------------------
 required_cols = ["Client","Ticker","Quantity"]
 for col in required_cols:
@@ -90,17 +85,17 @@ for col in required_cols:
         st.stop()
 
 # -------------------------
-# Add missing optional columns
+# Optional columns
 # -------------------------
 for col in ["Price","Sector","Country","AssetClass"]:
     if col not in df.columns:
         df[col] = np.nan
 
 # -------------------------
-# Compute value and weights
+# Compute value & weight
 # -------------------------
 if df["Price"].isna().all():
-    st.warning("Price column is empty: will be computed from historical prices")
+    st.warning("Price column empty: will use historical prices.")
 df["Value"] = df["Quantity"]*df["Price"]
 total_val = df["Value"].sum()
 df["Weight"] = df["Value"]/total_val if total_val>0 else 1/len(df)
@@ -121,7 +116,7 @@ st.subheader("Holdings")
 st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
 # -------------------------
-# Portfolio aggregation
+# Aggregations
 # -------------------------
 st.subheader("Portfolio Aggregations")
 agg_assetclass = df_client.groupby("AssetClass")["Value"].sum().reset_index()
@@ -150,16 +145,12 @@ prices = pd.DataFrame()
 failed = []
 
 for t in tickers:
-    try:
-        s = safe_download(t, period="2y")
-        if s is None or s.empty:
-            failed.append(t)
-            st.warning(f"No historical data for {t}, skipped.")
-            continue
-        prices[t] = s
-    except Exception as e:
+    s = safe_download(t, period="2y")
+    if s is None:
         failed.append(t)
-        st.warning(f"Error downloading {t}: {e}, skipped.")
+        st.warning(f"No historical data for {t}, skipped.")
+        continue
+    prices[t] = s
 
 prices = prices.dropna(axis=1, how="all").fillna(method="ffill").dropna(axis=0, how="any")
 if prices.empty:
@@ -193,14 +184,14 @@ col3.metric("Sharpe Ratio",f"{port_sharpe:.2f}")
 col4.metric("Max Drawdown",f"{mdd_val:.2%}")
 
 # -------------------------
-# Heatmap of correlations
+# Heatmap
 # -------------------------
 st.subheader("Return Correlation Heatmap")
 fig_heat = px.imshow(rets.corr(),text_auto=True,aspect="auto",title="Asset Correlation")
 st.plotly_chart(fig_heat,use_container_width=True)
 
 # -------------------------
-# Monte Carlo simulation
+# Monte Carlo
 # -------------------------
 st.subheader("Monte Carlo Simulation")
 n_sim = st.slider("Number of simulations", 500, 20000, 5000, 500)
