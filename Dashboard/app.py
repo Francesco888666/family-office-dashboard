@@ -96,19 +96,16 @@ mode = st.sidebar.radio("Sorgente dati", ["Carica CSV", "Usa DB"])
 df = None
 if mode=="Carica CSV":
     uploaded = st.sidebar.file_uploader("Carica file CSV", type=["csv"])
-     if uploaded:
-         try:
-        # Legge il CSV con encoding utf-8-sig per rimuovere BOM
-        df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
-        # Rimuove spazi iniziali/finali e BOM dai nomi delle colonne
-        df.columns = [c.strip().replace('\ufeff','') for c in df.columns]
-        # Controlla se la colonna 'Client' esiste
-        if "Client" not in df.columns:
-            st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
-            st.stop()
+    if uploaded:
+        try:
+            # Correzione: lettura CSV con utf-8-sig e rimozione spazi/BOM
+            df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
+            df.columns = [c.strip().replace('\ufeff','') for c in df.columns]
+            if "Client" not in df.columns:
+                st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
+                st.stop()
         except Exception as e:
-        st.error(f"Errore lettura CSV: {e}")
-
+            st.error(f"Errore lettura CSV: {e}")
 elif mode=="Usa DB":
     df = load_clients_from_db()
 
@@ -152,12 +149,6 @@ selected_client = st.sidebar.selectbox("Seleziona cliente", clients)
 df_client = df[df["Client"]==selected_client].copy()
 
 st.title(f"Family Office Dashboard — {selected_client}")
-
-# -------------------------
-# Holdings
-# -------------------------
-st.subheader("Holdings")
-st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
 # -------------------------
 # Holdings
