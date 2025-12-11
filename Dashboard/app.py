@@ -19,7 +19,7 @@ st.set_page_config(page_title="Family Office Dashboard", layout="wide")
 # -------------------------
 def stooq_download(ticker, retries=3, delay=1):
     ticker = ticker.lower()
-    if not ticker.endswith(".us"):  # Append US for NYSE/NASDAQ
+    if not ticker.endswith(".us"):
         ticker_url = f"{ticker}.us"
     else:
         ticker_url = ticker
@@ -68,7 +68,6 @@ if uploaded is None:
 try:
     df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
     df.columns = [c.strip() for c in df.columns]
-    # Map Italian columns to English
     col_map = {'Cliente':'Client','Quantita':'Quantity','Prezzo':'Price'}
     df = df.rename(columns={k:v for k,v in col_map.items() if k in df.columns})
 except Exception as e:
@@ -169,7 +168,11 @@ st.plotly_chart(fig_perf,use_container_width=True)
 # Returns & metrics
 # -------------------------
 rets = prices.pct_change().dropna()
-weights = df_client.set_index("Ticker")["Weight"].reindex(prices.columns).fillna(0).values
+# -------------------------
+# FIX: aggregate duplicate tickers
+weights_series = df_client.groupby("Ticker")["Weight"].sum()
+weights = weights_series.reindex(prices.columns).fillna(0).values
+# -------------------------
 port_daily = rets.dot(weights)
 port_ann = (1+port_daily).prod()**(252/len(port_daily))-1 if len(port_daily)>0 else np.nan
 port_vol = port_daily.std()*np.sqrt(252)
