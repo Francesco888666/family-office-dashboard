@@ -2,11 +2,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
-import time
+import requests
 import io
+import time
 import os
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -15,20 +15,25 @@ from reportlab.lib.utils import ImageReader
 st.set_page_config(page_title="Family Office Dashboard", layout="wide")
 
 # -------------------------
-# Helper: robust download with debug
+# Helper: download from Stooq
 # -------------------------
-def safe_download(ticker, period="2y", retries=3, delay=1):
+def stooq_download(ticker, retries=3, delay=1):
+    ticker = ticker.lower()
+    if not ticker.endswith(".us"):  # Append US for NYSE/NASDAQ
+        ticker_url = f"{ticker}.us"
+    else:
+        ticker_url = ticker
+    url = f"https://stooq.com/q/d/l/?s={ticker_url}&i=d"
     for attempt in range(retries):
         try:
-            df = yf.download(ticker, period=period, threads=False, progress=False)
-            if df is not None and not df.empty and "Adj Close" in df.columns:
-                print(f"{ticker}: {len(df)} rows downloaded")
-                return df["Adj Close"]
-            else:
-                print(f"{ticker}: no data returned")
+            df = pd.read_csv(url, parse_dates=['Date'], index_col='Date')
+            df = df.sort_index()
+            if "Close" in df.columns:
+                print(f"{ticker}: {len(df)} rows downloaded from Stooq")
+                return df["Close"]
         except Exception as e:
-            print(f"Attempt {attempt+1} failed for {ticker}: {e}")
-        time.sleep(delay)
+            print(f"{ticker}: attempt {attempt+1} failed: {e}")
+            time.sleep(delay)
     return None
 
 # -------------------------
@@ -51,32 +56,27 @@ def max_drawdown(price_series):
     return drawdown.min(), drawdown
 
 # -------------------------
-# Sidebar
+# Sidebar and CSV upload
 # -------------------------
 st.sidebar.header("📁 Input Data")
 uploaded = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
 
-df = None
-if uploaded:
-    try:
-        df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
-        df.columns = [c.strip() for c in df.columns]
-        # Rename columns if necessary
-        col_map = {'Cliente':'Client','Quantita':'Quantity','Prezzo':'Price'}
-        df = df.rename(columns={k:v for k,v in col_map.items() if k in df.columns})
-        # Check required columns
-        if "Client" not in df.columns:
-            st.error("CSV file does not contain required column 'Client'.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Error reading CSV: {e}")
-        st.stop()
-else:
-    st.warning("Please upload a CSV file.")
+if uploaded is None:
+    st.warning("Please upload a CSV file to proceed.")
+    st.stop()
+
+try:
+    df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
+    df.columns = [c.strip() for c in df.columns]
+    # Map Italian columns to English
+    col_map = {'Cliente':'Client','Quantita':'Quantity','Prezzo':'Price'}
+    df = df.rename(columns={k:v for k,v in col_map.items() if k in df.columns})
+except Exception as e:
+    st.error(f"Error reading CSV: {e}")
     st.stop()
 
 # -------------------------
-# Required columns
+# Required columns check
 # -------------------------
 required_cols = ["Client","Ticker","Quantity"]
 for col in required_cols:
@@ -84,28 +84,28 @@ for col in required_cols:
         st.error(f"Missing required column: {col}")
         st.stop()
 
-# -------------------------
-# Optional columns
-# -------------------------
+# Add optional columns if missing
 for col in ["Price","Sector","Country","AssetClass"]:
     if col not in df.columns:
         df[col] = np.nan
 
-# -------------------------
-# Compute value & weight
-# -------------------------
+# Compute value and weight
 if df["Price"].isna().all():
     st.warning("Price column empty: will use historical prices.")
-df["Value"] = df["Quantity"]*df["Price"]
+df["Value"] = df["Quantity"]*df["Price"].fillna(0)
 total_val = df["Value"].sum()
 df["Weight"] = df["Value"]/total_val if total_val>0 else 1/len(df)
 
 # -------------------------
-# Client selection
+# Client selection with 'All Clients'
 # -------------------------
-clients = df["Client"].unique().tolist()
+clients = ["All Clients"] + df["Client"].unique().tolist()
 selected_client = st.sidebar.selectbox("Select client", clients)
-df_client = df[df["Client"]==selected_client].copy()
+
+if selected_client=="All Clients":
+    df_client = df.copy()
+else:
+    df_client = df[df["Client"]==selected_client].copy()
 
 st.title(f"Family Office Dashboard — {selected_client}")
 
@@ -113,7 +113,7 @@ st.title(f"Family Office Dashboard — {selected_client}")
 # Holdings
 # -------------------------
 st.subheader("Holdings")
-st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
+st.dataframe(df_client[["Client","Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
 # -------------------------
 # Aggregations
@@ -145,7 +145,7 @@ prices = pd.DataFrame()
 failed = []
 
 for t in tickers:
-    s = safe_download(t, period="2y")
+    s = stooq_download(t)
     if s is None:
         failed.append(t)
         st.warning(f"No historical data for {t}, skipped.")
