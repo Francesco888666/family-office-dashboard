@@ -5,7 +5,6 @@ import numpy as np
 import yfinance as yf
 import plotly.express as px
 import plotly.graph_objects as go
-import sqlite3
 import time
 import io
 import os
@@ -53,97 +52,55 @@ def sortino_ratio(returns, rf=0.01):
     return ann_excess/downside if downside and downside>0 else np.nan
 
 # -------------------------
-# SQLite DB
-# -------------------------
-DB_PATH = "portfolios.db"
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS portfolios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client TEXT,
-            ticker TEXT,
-            quantity REAL,
-            price REAL,
-            sector TEXT,
-            country TEXT,
-            assetclass TEXT
-        );
-    """)
-    conn.commit()
-    conn.close()
-
-def save_df_to_db(df):
-    conn = sqlite3.connect(DB_PATH)
-    df.to_sql("portfolios", conn, if_exists="append", index=False)
-    conn.close()
-
-def load_clients_from_db():
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("SELECT * FROM portfolios", conn)
-    conn.close()
-    return df
-
-init_db()
-
-# -------------------------
 # Sidebar
 # -------------------------
-st.sidebar.header("📁 Input dati")
-mode = st.sidebar.radio("Sorgente dati", ["Carica CSV", "Usa DB"])
+st.sidebar.header("📁 Input Data")
+uploaded = st.sidebar.file_uploader("Upload CSV file", type=["csv"])
 
 df = None
-if mode=="Carica CSV":
-    uploaded = st.sidebar.file_uploader("Carica file CSV", type=["csv"])
-    if uploaded:
-        try:
-            df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
-            df.columns = [c.strip() for c in df.columns]
-            # rinomina colonne italiane se necessario
-            if 'Cliente' in df.columns:
-                df = df.rename(columns={'Cliente':'Client'})
-            if 'Quantita' in df.columns:
-                df = df.rename(columns={'Quantita':'Quantity'})
-            if 'Prezzo' in df.columns:
-                df = df.rename(columns={'Prezzo':'Price'})
-            # controllo colonna obbligatoria
-            if "Client" not in df.columns:
-                st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
-                st.stop()
-        except Exception as e:
-            st.error(f"Errore lettura CSV: {e}")
-elif mode=="Usa DB":
-    df = load_clients_from_db()
-
-# -------------------------
-# Check df
-# -------------------------
-if df is None or df.empty:
-    st.warning("Nessun dato disponibile. Carica un CSV valido o salva dati nel DB.")
+if uploaded:
+    try:
+        df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
+        df.columns = [c.strip() for c in df.columns]
+        # Rename columns if they are in another language
+        if 'Cliente' in df.columns:
+            df = df.rename(columns={'Cliente':'Client'})
+        if 'Quantita' in df.columns:
+            df = df.rename(columns={'Quantita':'Quantity'})
+        if 'Prezzo' in df.columns:
+            df = df.rename(columns={'Prezzo':'Price'})
+        # Check required column
+        if "Client" not in df.columns:
+            st.error("CSV file does not contain required column 'Client'.")
+            st.stop()
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
+        st.stop()
+else:
+    st.warning("Please upload a CSV file.")
     st.stop()
 
 # -------------------------
-# Check colonne obbligatorie
+# Check required columns
 # -------------------------
 required_cols = ["Client","Ticker","Quantity"]
 for col in required_cols:
     if col not in df.columns:
-        st.error(f"Colonna obbligatoria mancante: {col}")
+        st.error(f"Missing required column: {col}")
         st.stop()
 
 # -------------------------
-# Aggiungi colonne mancanti
+# Add missing optional columns
 # -------------------------
 for col in ["Price","Sector","Country","AssetClass"]:
     if col not in df.columns:
         df[col] = np.nan
 
 # -------------------------
-# Gestione Price
+# Compute value and weights
 # -------------------------
 if df["Price"].isna().all():
-    st.warning("Colonna 'Price' vuota o mancante: verrà calcolata dai prezzi storici")
+    st.warning("Price column is empty: will be computed from historical prices")
 df["Value"] = df["Quantity"]*df["Price"]
 total_val = df["Value"].sum()
 df["Weight"] = df["Value"]/total_val if total_val>0 else 1/len(df)
@@ -152,7 +109,7 @@ df["Weight"] = df["Value"]/total_val if total_val>0 else 1/len(df)
 # Client selection
 # -------------------------
 clients = df["Client"].unique().tolist()
-selected_client = st.sidebar.selectbox("Seleziona cliente", clients)
+selected_client = st.sidebar.selectbox("Select client", clients)
 df_client = df[df["Client"]==selected_client].copy()
 
 st.title(f"Family Office Dashboard — {selected_client}")
@@ -164,9 +121,9 @@ st.subheader("Holdings")
 st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
 # -------------------------
-# Valutazioni totali portfolio
+# Portfolio aggregation
 # -------------------------
-st.subheader("Valutazioni totali portfolio")
+st.subheader("Portfolio Aggregations")
 agg_assetclass = df_client.groupby("AssetClass")["Value"].sum().reset_index()
 agg_sector = df_client.groupby("Sector")["Value"].sum().reset_index()
 agg_country = df_client.groupby("Country")["Value"].sum().reset_index()
@@ -176,7 +133,7 @@ col2.dataframe(agg_sector)
 col3.dataframe(agg_country)
 
 # -------------------------
-# Allocazione charts
+# Allocation charts
 # -------------------------
 fig_class = px.pie(agg_assetclass,names="AssetClass",values="Value",hole=0.4,title="Asset Class Allocation")
 fig_sector = px.bar(agg_sector,x="Sector",y="Value",title="Sector Allocation")
@@ -187,31 +144,34 @@ col2.plotly_chart(fig_sector,use_container_width=True)
 # -------------------------
 # Historical prices
 # -------------------------
-st.subheader("Performance Storica")
+st.subheader("Historical Performance")
 tickers = df_client["Ticker"].unique().tolist()
 prices = pd.DataFrame()
 failed = []
+
 for t in tickers:
-    s = safe_download(t,period="2y")
-    if s is None:
-        failed.append(t)
-    else:
+    try:
+        s = safe_download(t, period="2y")
+        if s is None or s.empty:
+            failed.append(t)
+            st.warning(f"No historical data for {t}, skipped.")
+            continue
         prices[t] = s
+    except Exception as e:
+        failed.append(t)
+        st.warning(f"Error downloading {t}: {e}, skipped.")
 
+prices = prices.dropna(axis=1, how="all").fillna(method="ffill").dropna(axis=0, how="any")
 if prices.empty:
-    st.error("Nessun dato storico disponibile per i ticker.")
+    st.error("No historical data available for valid tickers.")
     st.stop()
-if failed:
-    st.warning(f"I seguenti ticker non hanno dati storici: {failed}")
-
-prices = prices.dropna(axis=1,how="all").fillna(method="ffill").dropna(axis=0,how="any")
 
 # Cumulative performance
 cum = prices/prices.iloc[0]
 fig_perf = go.Figure()
 for t in cum.columns:
     fig_perf.add_trace(go.Scatter(x=cum.index,y=cum[t],mode="lines",name=t))
-fig_perf.update_layout(title="Performance Cumulativa",xaxis_title="Data",yaxis_title="Cumulativo")
+fig_perf.update_layout(title="Cumulative Performance",xaxis_title="Date",yaxis_title="Cumulative")
 st.plotly_chart(fig_perf,use_container_width=True)
 
 # -------------------------
@@ -227,24 +187,24 @@ port_sortino = sortino_ratio(port_daily)
 mdd_val,_ = max_drawdown((1+port_daily).cumprod())
 
 col1,col2,col3,col4 = st.columns(4)
-col1.metric("Rendimento annuo stimato",f"{port_ann:.2%}")
-col2.metric("Volatilità annua",f"{port_vol:.2%}")
-col3.metric("Sharpe",f"{port_sharpe:.2f}")
+col1.metric("Estimated Annual Return",f"{port_ann:.2%}")
+col2.metric("Annual Volatility",f"{port_vol:.2%}")
+col3.metric("Sharpe Ratio",f"{port_sharpe:.2f}")
 col4.metric("Max Drawdown",f"{mdd_val:.2%}")
 
 # -------------------------
-# Heatmap rendimenti
+# Heatmap of correlations
 # -------------------------
-st.subheader("Heatmap rendimenti")
-fig_heat = px.imshow(rets.corr(),text_auto=True,aspect="auto",title="Correlazione tra asset")
+st.subheader("Return Correlation Heatmap")
+fig_heat = px.imshow(rets.corr(),text_auto=True,aspect="auto",title="Asset Correlation")
 st.plotly_chart(fig_heat,use_container_width=True)
 
 # -------------------------
 # Monte Carlo simulation
 # -------------------------
 st.subheader("Monte Carlo Simulation")
-n_sim = st.slider("Numero simulazioni", 500, 20000, 5000, 500)
-horizon = st.slider("Orizzonte giorni", 30, 252*3, 252)
+n_sim = st.slider("Number of simulations", 500, 20000, 5000, 500)
+horizon = st.slider("Simulation horizon (days)", 30, 252*3, 252)
 
 mu = rets.mean().values
 cov = rets.cov().values
@@ -255,13 +215,13 @@ for i in range(n_sim):
     sim_port = np.cumprod(1+sim_daily.dot(weights))[-1]
     sim_results.append(sim_port)
 
-fig_mc = px.histogram(sim_results,nbins=100,title="Distribuzione Monte Carlo (valore finale)")
+fig_mc = px.histogram(sim_results,nbins=100,title="Monte Carlo Final Portfolio Distribution")
 st.plotly_chart(fig_mc,use_container_width=True)
 
 # -------------------------
 # PDF report
 # -------------------------
-st.subheader("Genera PDF Report")
+st.subheader("Generate PDF Report")
 def fig_to_image_bytes(fig,width=900,height=600):
     return fig.to_image(format="png",width=width,height=height,scale=2)
 
@@ -271,11 +231,11 @@ def create_pdf_report(client_name,df_client,figures_dict,output_path="report.pdf
     margin = 40
     y = h - margin
     c.setFont("Helvetica-Bold",16)
-    c.drawString(margin,y,f"Report Portafoglio — {client_name}")
+    c.drawString(margin,y,f"Portfolio Report — {client_name}")
     y -= 30
     c.setFont("Helvetica",10)
     total_val = df_client["Value"].sum()
-    c.drawString(margin,y,f"Valore Totale: {total_val:,.2f} | Asset: {len(df_client)}")
+    c.drawString(margin,y,f"Total Value: {total_val:,.2f} | Assets: {len(df_client)}")
     y -= 20
     for title,fig in figures_dict.items():
         try:
@@ -291,36 +251,36 @@ def create_pdf_report(client_name,df_client,figures_dict,output_path="report.pdf
             y -= 320
         except:
             c.setFont("Helvetica",9)
-            c.drawString(margin,y,f"Impossibile inserire grafico: {title}")
+            c.drawString(margin,y,f"Cannot insert chart: {title}")
             y -= 12
     c.save()
 
 figures = {
-    "Allocazione AssetClass": fig_class,
-    "Allocazione Settore": fig_sector,
-    "Performance Cumulativa": fig_perf,
-    "Heatmap Correlazioni": fig_heat,
+    "Asset Class Allocation": fig_class,
+    "Sector Allocation": fig_sector,
+    "Cumulative Performance": fig_perf,
+    "Correlation Heatmap": fig_heat,
     "Monte Carlo": fig_mc
 }
 
-if st.button("Genera PDF completo"):
+if st.button("Generate PDF Report"):
     tmp_pdf = f"report_{selected_client}.pdf"
     try:
         create_pdf_report(selected_client,df_client,figures,output_path=tmp_pdf)
         with open(tmp_pdf,"rb") as f:
-            st.download_button("Scarica PDF Report",f.read(),file_name=tmp_pdf,mime="application/pdf")
-        st.success("Report generato con successo.")
+            st.download_button("Download PDF",f.read(),file_name=tmp_pdf,mime="application/pdf")
+        st.success("PDF Report generated successfully.")
         try: os.remove(tmp_pdf)
         except: pass
     except Exception as e:
-        st.error(f"Errore generazione PDF: {e}")
+        st.error(f"Error generating PDF: {e}")
 
 # -------------------------
 # Download CSV
 # -------------------------
-if st.button("Scarica CSV Report"):
+if st.button("Download CSV Report"):
     csv_bytes = df_client.to_csv(index=False).encode("utf-8")
     st.download_button("Download CSV",data=csv_bytes,
                        file_name=f"report_{selected_client}.csv",mime="text/csv")
 
-st.info("Dashboard completa — holdings, heatmap, Monte Carlo e PDF report pronti.")
+st.info("Dashboard complete — holdings, metrics, correlation heatmap, Monte Carlo simulation, and PDF report ready.")
