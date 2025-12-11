@@ -97,15 +97,15 @@ df = None
 if mode=="Carica CSV":
     uploaded = st.sidebar.file_uploader("Carica file CSV", type=["csv"])
     if uploaded:
-    try:
-        df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")  # utf-8-sig rimuove BOM
-        df.columns = [c.strip() for c in df.columns]  # rimuove spazi iniziali/finali
-        # Controllo colonna Client
-        if "Client" not in df.columns:
-            st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Errore lettura CSV: {e}")
+        try:
+            # Correzione: lettura CSV con utf-8-sig e rimozione spazi colonne
+            df = pd.read_csv(uploaded, sep=",", encoding="utf-8-sig")
+            df.columns = [c.strip() for c in df.columns]
+            if "Client" not in df.columns:
+                st.error("Il CSV non contiene la colonna obbligatoria 'Client'. Controlla il file.")
+                st.stop()
+        except Exception as e:
+            st.error(f"Errore lettura CSV: {e}")
 elif mode=="Usa DB":
     df = load_clients_from_db()
 
@@ -149,6 +149,12 @@ selected_client = st.sidebar.selectbox("Seleziona cliente", clients)
 df_client = df[df["Client"]==selected_client].copy()
 
 st.title(f"Family Office Dashboard — {selected_client}")
+
+# -------------------------
+# Holdings
+# -------------------------
+st.subheader("Holdings")
+st.dataframe(df_client[["Ticker","Quantity","Price","Value","Sector","Country","AssetClass","Weight"]])
 
 # -------------------------
 # Holdings
