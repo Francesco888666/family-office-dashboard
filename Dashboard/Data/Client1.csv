@@ -1,0 +1,4 @@
+Cliente,Ticker,Quantity,Price,Sector,Country,AssetClass
+Mario Rossi,AAPL,10,170,Tech,USA,Stock
+Mario Rossi,MSFT,5,310,Tech,USA,Stock
+Mario Rossi,TSLA,8,700,Auto,USA,Stock
